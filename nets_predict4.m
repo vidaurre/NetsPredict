@@ -245,7 +245,7 @@ if strcmp(Method,'ridge') || relaxed
 end
 
 if relaxed
-   alpha_ridge = [0.00001 0.0001 0.001 0.01 0.1 0.4 0.7 0.9 1.0 10 100];
+   alpha_ridge = [0.00001 0.0001 0.001 0.01 0.1 0.4 0.7 0.9 1.0 10 100]; 
 end
 
 YinORIG = Yin; 
@@ -538,7 +538,7 @@ for perm=1:Nperm
         % Inner CV loop (2) - only for enet when relaxed is applied
         if enet && relaxed
             QYin = Yin2(ji,:);
-            QpredictedYp = Inf(QN,1);
+            QpredictedYp = Inf(QN,length(alpha_ridge));
             for Qifold = 1:length(Qfolds)
                 QJ = Qfolds{Qifold};
                 Qji = setdiff(1:QN,QJ); 
@@ -546,13 +546,14 @@ for perm=1:Nperm
                 if strcmp(family{2},'gaussian'), Qmy=mean(QY);  QY=QY-Qmy; 
                 else, error('Family other than Gaussian not currenty implemented for relaxed estimation');
                 end
+                QXJ=QXin(QJ,:);
                 for ialph = 1:length(alpha_ridge)
                     beta_relaxed = (QX' * QX + alpha_ridge(ialph) * ridg_pen_scale * eye(size(QX,2))) \ (QX' * QY);
+                    QpredictedYp(QJ,ialph) = QXJ * beta_relaxed + repmat(Qmy,length(QJ),1);
                 end
-                QXJ=QXin(QJ,:);
-                QpredictedYp(QJ) = QXJ * beta_relaxed + repmat(Qmy,length(QJ),1);
             end
-            Qdev = sum(( QpredictedYp - QYinCOMPARE).^2 ) / QN; Qdev = Qdev';
+            Qdev = sum(( QpredictedYp(:,1:length(glmfit.lambda)) - ...
+                repmat(QYinCOMPARE,1,length(alpha_ridge))).^2) / QN; Qdev = Qdev';
             [~, ialph] = min(Qdev);
             beta_final = (X' * X + alpha_ridge(ialph) * ridg_pen_scale * eye(size(X,2))) \ (X' * Y);
             beta(groti,ifold,2) = beta_final;
@@ -603,9 +604,6 @@ for perm=1:Nperm
         
         if perm==1
             stats.alpha(ifold) = options.alpha;
-            if relaxed
-                stats.alpha_ridge(ifold) = alpha_ridge(ialph);
-            end
         end
         
     end
