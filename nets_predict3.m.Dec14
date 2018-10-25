@@ -1,0 +1,458 @@
+%
+% nets_predict - elastic-net estimation, with two-stage feature selection, using (stratified) LOO and permutation testing
+% Steve Smith, Diego Vidaurre, Ludo Griffanti, Tom Nichols, Anderson Winkler
+% FMRIB Oxford, 2013-2014
+%
+% [predictedY,stats] = nets_predict(Y,X,family,parameters);
+% [predictedY,stats] = nets_predict(Y,X,family,parameters,correlation_structure);
+% [predictedY,stats] = nets_predict(Y,X,family,parameters,correlation_structure,Permutations);
+% [predictedY,stats] = nets_predict(Y,X,family,parameters,correlation_structure,Permutations,confounds);
+%
+% INPUTS
+% Y - data vector (samples X 1)
+% X - design matrix (samples X features)
+% family - probability distribution of the response, one of the following:
+%   + 'gaussian': standard linear regression on a continuous response
+%   + 'poisson': non-negative counts
+%   + 'multinomial': a binary-valued matrix with as columns as classes
+%   + 'cox': a two-column matrix with the 1st column for time and the 2d for status: 1 for death and 0 right censored.
+% parameters is a structure with:
+%   + Nfeatures - Number of features to initially filter (0 to include all)
+%             if Nfeatures has an optional second component, for early stopping on Elastic net
+%   + alpha - a vector of weights on the L2 penalty on the regression coefficients
+%   + CVscheme - vector of two elements: first is number of folds for elastic net
+%             parameter selection; second is number of folds for the model selection phase (0 in both for LOO)
+%   + Nperm - number of permutations (set to 0 to skip permutation testing)
+%   + show_scatter - set to 1 to show a scatter plot of predicted_Y vs Y (only for family='gaussian' or 'poisson')
+%   + verbose -  display progress?
+% correlation_structure (optional) - an (Nsamples X Nsamples) matrix with integer dependency labels (e.g., family structure)
+% Permutations (optional but must also have correlation_structure) - pre-created set of permutations
+% confounds (optional) - features that potentially influence the inputs, and the outputs for family="gaussian'
+%
+% OUTPUTS
+% predictedY - predicted response
+% stats structure, with fields
+%   + pval - permutation-based p-value, if permutation is run;
+%            otherwise, correlation-based (family=gaussian) or multinomial-based p-value (family='multinomial')
+%   + dev - cross-validated deviance (for family='gaussian', this is the sum of squared errors)
+%   + cod - coeficient of determination
+%   + dev_deconf - cross-validated deviance in the deconfounded space (family='gaussian')
+%   + cod_deconf - coeficient of determination in the deconfounded space (family='gaussian')
+%   + accuracy - cross-validated classification accuracy (family='multinomial')
+
+function [predictedY,stats,predictedYC,YoutC] = nets_predict3(Yin,Xin,family,parameters,varargin)
+
+[N,p]=size(Xin);
+
+if nargin<3, family = 'gaussian'; end
+if nargin<4, parameters = {}; end
+if ~isfield(parameters,'Nfeatures'), Nfeatures=p;
+else Nfeatures = parameters.Nfeatures; end
+if ~isfield(parameters,'alpha'), alpha = [0.01 0.1 0.4 0.7 0.9 0.99];
+else alpha = parameters.alpha; end
+if ~isfield(parameters,'CVscheme'), CVscheme=[10 10];
+else CVscheme = parameters.CVscheme; end
+if ~isfield(parameters,'Nperm'), Nperm=1;
+else Nperm = parameters.Nperm; end
+if ~isfield(parameters,'nlambda'), nlambda=2000;
+else nlambda = parameters.nlambda; end
+if ~isfield(parameters,'show_scatter'), show_scatter=0;
+else show_scatter = parameters.show_scatter; end
+if ~isfield(parameters,'verbose'), verbose=0;
+else verbose = parameters.verbose; end
+
+tmpnm = tempname; mkdir(tmpnm); mkdir(strcat(tmpnm,'/out')); mkdir(strcat(tmpnm,'/params')); 
+
+if strcmp(family,'multinomial') && size(Yin,2)==1, Yin = nets_class_vectomat(Yin); end
+
+if (Nperm<2),  Nperm=1;  end;
+cs=[];
+if (nargin>4)
+    cs=varargin{1};
+    if ~isempty(cs)
+        [allcs(:,2),allcs(:,1)]=ind2sub([length(cs) length(cs)],find(cs>0));   % find all correlated samples for every sample
+        [grotMZi(:,2),grotMZi(:,1)]=ind2sub([length(cs) length(cs)],find(tril(cs,1)==1));
+        [grotDZi(:,2),grotDZi(:,1)]=ind2sub([length(cs) length(cs)],find(tril(cs,1)==2));
+    end
+end
+if ~exist('allcs','var'), allcs = []; end
+PrePerms=0;
+if (nargin>5)
+    Permutations=varargin{2};
+    if ~isempty(Permutations)
+        PrePerms=1;
+        Nperm=size(Permutations,2);
+    end
+end
+confounds=[];
+if (nargin>6)
+    confounds=varargin{3};
+end
+if strcmp(family,'multinomial'), 
+    q = size(Yin,2); 
+    if q>9, error('Too many classes!'); end
+end
+
+YinORIG=Yin; YinORIGmean = zeros(size(Yin));
+grotperms = zeros(Nperm,1);
+if ~isempty(confounds),
+    YC = zeros(size(Yin));
+    YCmean = zeros(size(Yin));
+end
+
+for perm=1:Nperm
+    if (perm>1)
+        if isempty(cs)           % simple full permutation with no correlation structure
+            Yin=Yin(randperm(N),:);
+        elseif (PrePerms==0)          % complex permutation, taking into account correlation structure
+            PERM=zeros(1,N);
+            perm1=randperm(size(grotMZi,1));
+            for ipe=1:length(perm1)
+                if rand<0.5, wt=[1 2]; else wt=[2 1]; end;
+                PERM(grotMZi(ipe,1))=grotMZi(perm1(ipe),wt(1));
+                PERM(grotMZi(ipe,2))=grotMZi(perm1(ipe),wt(2));
+            end
+            perm1=randperm(size(grotDZi,1));
+            for ipe=1:length(perm1)
+                if rand<0.5, wt=[1 2]; else wt=[2 1]; end;
+                PERM(grotDZi(ipe,1))=grotDZi(perm1(ipe),wt(1));
+                PERM(grotDZi(ipe,2))=grotDZi(perm1(ipe),wt(2));
+            end
+            from=find(PERM==0);  pto=randperm(length(from));  to=from(pto);  PERM(from)=to;
+            Yin=YinORIG(PERM,:);
+        else                   % pre-supplied permutation
+            Yin=YinORIG(Permutations(:,perm),:);  % or maybe it should be the other way round.....?
+        end
+    end
+    
+    if strcmp(family,'multinomial')
+        predictedYp = zeros(N,q); predictedYp0 = zeros(N,q);
+        if ~isempty(confounds), predictedYpC = zeros(N,q); end
+    else
+        predictedYp = zeros(N,1);
+        if ~strcmp(family,'gaussian'), predictedYp0 = zeros(N,1); end
+        if ~isempty(confounds), predictedYpC = zeros(N,1); end
+    end
+    
+    % create the inner CV structure - stratified for family=multinomial
+    folds = nets_cvfolds(Yin,family,CVscheme(1),allcs);
+    
+    for ifold = 1:length(folds) 
+        
+        if verbose, fprintf('CV iteration %d \n',ifold); end
+        J = folds{ifold};
+        if isempty(J), continue; end
+        
+        ji=setdiff(1:N,J); QN = length(ji);
+        X=Xin(ji,:);  Y=Yin(ji,:);
+        if strcmp(family,'gaussian'), YinORIGmean(J) = mean(Y); end
+        
+        % deconfounding business
+        if ~isempty(confounds),
+            confM=mean(confounds(ji,:)); confX=nets_demean(confounds(ji,:));
+            [betaX,X,betaY,Y] = nets_deconfound(X,Y,confX,family,[],[],tmpnm);
+        end;
+        
+        % standardising
+        if strcmp(family,'gaussian'),
+            my=mean(Y); Y=Y-my;
+            YCmean(J) = my;
+        end
+        mx=mean(X);  sx=std(X);
+        X = (X - repmat(mx,length(ji),1)) ./ repmat(sx,length(ji),1);
+        
+        % pre-kill features
+        if Nfeatures(1)<p && Nfeatures(1)>0,
+            options = {}; options.lambda = [1 0]';
+            if strcmp(family,'cox'), options.intr = false; end
+            dev = nets_glmnet(X, Y, family, 1, tmpnm, options);
+            [~,groti0]=sort(dev);
+            groti0=groti0(end-Nfeatures(1)+1:end);
+        else
+            groti0 = 1:p;
+        end
+        
+        QXin=Xin(ji,groti0); QYin=Yin(ji,:);
+        X = X(:,groti0);
+        options = {}; options.standardize = false;
+        if strcmp(family,'gaussian'), options.intr = false; end
+        
+        % family structure for this fold
+        Qallcs=[]; if ~isempty(confounds), Qconfounds=confounds(ji,:); end
+        if (~isempty(cs)),
+            for Qiii=1:size(allcs,1)
+                if(size(find(ji==allcs(Qiii,1)),2)>0)
+                    Qallcs=[Qallcs; find(ji==allcs(Qiii,1)) find(ji==allcs(Qiii,2))];
+                end
+            end
+        end
+        
+        % create the inner CV structure - stratified for family=multinomial
+        Qfolds = nets_cvfolds(Y,family,CVscheme(2),Qallcs);
+        
+        % Variable selection with the elastic net
+        if length(Nfeatures)==2, options.pmax = Nfeatures(2); end
+        %Qdf = {};
+        Dev = Inf(nlambda,length(alpha));
+        Lambda = {};
+        for ialph = 1:length(alpha)
+            if strcmp(family,'multinomial'), QpredictedYp = Inf(QN,q,nlambda);
+            else QpredictedYp = Inf(QN,nlambda);
+            end
+            options.alpha = alpha(ialph); options.nlambda = nlambda;
+            QYinCOMPARE=QYin;
+            %Qdf{ialph} = NaN(nlambda,length(Qfolds));
+            % Inner CV loop
+            for Qifold = 1:length(Qfolds)
+                QJ = Qfolds{Qifold};
+                Qji=setdiff(1:QN,QJ); QX=QXin(Qji,:);  QY=QYin(Qji,:);
+                if ~isempty(confounds),
+                    QconfM=mean(Qconfounds(Qji,:)); QconfX=nets_demean(Qconfounds(Qji,:));
+                    [QbetaX,QX,QbetaY,QY] = nets_deconfound(QX,QY,QconfX,family,[],[],tmpnm);
+                end;
+                Qmx=mean(QX);  Qsx=std(QX);  QX=nets_normalise(QX);
+                if strcmp(family,'gaussian'), Qmy=mean(QY);  QY=QY-Qmy; end
+                if Qifold>1, options.lambda = Lambda{ialph};
+                elseif isfield(options,'lambda'), options = rmfield(options,'lambda'); end
+                glmfit = nets_glmnet(QX,QY,family,0,tmpnm,options);
+                if Qifold == 1, 
+                    Lambda{ialph} = glmfit.lambda; 
+                    options = rmfield(options,'nlambda');
+                end
+                QXJ=QXin(QJ,:);
+                if ~isempty(confounds),
+                    QconfXte = (Qconfounds(QJ,:)-repmat(QconfM,length(QJ),1));
+                    [~,QXJ,~,QYinCOMPARE(QJ,:)] = nets_deconfound(QXJ,QYinCOMPARE(QJ,:),QconfXte,family,QbetaX,QbetaY,tmpnm);
+                end
+                QXJ=(QXJ-repmat(Qmx,length(QJ),1)) ./ repmat(Qsx,length(QJ),1);
+                if strcmp(family,'gaussian'),
+                    QpredictedYp(QJ,1:length(glmfit.lambda)) = QXJ * glmfit.beta + repmat(Qmy,length(QJ),length(glmfit.lambda));
+                elseif strcmp(family,'multinomial')
+                    QpredictedYp(QJ,:,1:length(glmfit.lambda)) = nets_glmnetpredict(glmfit,QXJ,glmfit.lambda,'response');
+                elseif strcmp(family,'poisson')
+                    QpredictedYp(QJ,1:length(glmfit.lambda)) = exp(QXJ * glmfit.beta + repmat(glmfit.a0',length(QJ),1) );
+                else % cox
+                    QpredictedYp(QJ,1:length(glmfit.lambda)) = exp(QXJ * glmfit.beta);
+                end
+                %Qdf{ialph}(1:length(glmfit.df),Qifold) = glmfit.df;
+            end
+            % Pick the one with the lowest deviance (=quadratic error for family="gaussian")
+            if strcmp(family,'gaussian'), % it's actually QN*log(sum.... but it doesn't matter
+                Qdev = sum(( QpredictedYp(:,1:length(Lambda{ialph})) - repmat(QYinCOMPARE,1,length(Lambda{ialph}))).^2) / QN; Qdev = Qdev';
+            elseif strcmp(family,'multinomial'),
+                Qdev = Inf(length(Lambda{ialph}),1);
+                for i=1:length(Lambda{ialph}), Qdev(i) = - sum(log(sum(QYinCOMPARE .* QpredictedYp(:,:,i) ,2))); end
+            elseif strcmp(family,'poisson'),
+                Ye = repmat(QYinCOMPARE,1,length(Lambda{ialph}));
+                Qdev = sum(Ye .* log( (Ye+(Ye==0)) ./ QpredictedYp(:,1:length(Lambda{ialph}))) - (Ye - QpredictedYp(:,1:length(Lambda{ialph})))); Qdev = Qdev';
+            else % cox
+                failures = find(QYinCOMPARE(:,2) == 1)';
+                Qdev = zeros(length(Lambda{ialph}),1);
+                for i=1:length(Lambda{ialph}),
+                    for n=failures, Qdev(i) = Qdev(i) + log( QpredictedYp(n,i) / sum(QpredictedYp(QYinCOMPARE(:,1) >= QYinCOMPARE(n,1),i)) ); end
+                end; Qdev = -2 * Qdev;
+            end
+            Dev(1:length(Qdev),ialph) = Qdev;
+        end
+        [~,opt] = min(Dev(:));
+        ialph = ceil(opt / nlambda);
+        ilamb = mod(opt,nlambda); if ilamb==0, ilamb = nlambda; end
+        [~,opt] = min(Dev(:,1)); lambda = Lambda{1}(opt);
+        options.alpha = alpha(ialph);
+        options.lambda = (2:-.1:1)' * Lambda{ialph}(ilamb); % it doesn't like just 1 lambda
+        % we set lambda instead of pmax/dfmax because of a bug in glmnet that arises when pmax is specified
+        %options.pmax = max(2,ceil(mean(Qdf{ialph}(ilamb,:))));
+        %options.dfmax = options.pmax;  
+        %options = rmfield(options,'lambda');
+        % and run again on the whole fold
+        glmfit = nets_glmnet(X,Y,family,0,tmpnm,options);
+        if strcmp(family,'multinomial'), fprintf('It %d-1, %d variables, alpha=%f, lambda=%f \n',ifold,sum(glmfit.beta{1}(:,end)~=0 ),options.alpha,lambda)
+        else fprintf('It %d-1, %d variables, alpha=%f, lambda=%f \n',ifold,sum(glmfit.beta(:,end)~=0 ),options.alpha,lambda); end
+        if strcmp(family,'multinomial'), % because there are a different set of coefficients per class
+            groti = glmfit.beta{1}(:,end)~=0;
+        else
+            groti = glmfit.beta(:,end)~=0;
+        end
+        if sum(groti)<2, 
+            warning('The empty model turns out to be the best... ')
+            if sum(groti)==1 && groti(1)==0, groti(1) = 1;
+            elseif sum(groti)==1, groti(2) = 1;
+            else groti(1:2) = 1; 
+            end
+        end
+        QXin=QXin(:,groti);
+        X = X(:,groti);
+        groti = groti0(groti);
+        mx = mx(groti); sx = sx(groti);
+        
+        % Prediction with the elastic net, keeping the (CV) best no. of variables for each value of alpha
+        % It uses the best value of alpha from the first stage
+        options.nlambda = nlambda; if isfield(options,'lambda'), options = rmfield(options,'lambda'); end
+        if strcmp(family,'multinomial'), QpredictedYp = Inf(QN,q,nlambda);
+        else QpredictedYp = Inf(QN,nlambda);
+        end
+        QYinCOMPARE=QYin;
+        % Inner CV loop
+        for Qifold = 1:length(Qfolds)
+            QJ = Qfolds{Qifold};
+            Qji=setdiff(1:QN,QJ); QX=QXin(Qji,:);  QY=QYin(Qji,:);
+            if ~isempty(confounds),
+                QconfM=mean(Qconfounds(Qji,:)); QconfX=nets_demean(Qconfounds(Qji,:));
+                [QbetaX,QX,QbetaY,QY] = nets_deconfound(QX,QY,QconfX,family,[],[],tmpnm);
+            end;
+            Qmx=mean(QX);  Qsx=std(QX);  QX=nets_normalise(QX);
+            if strcmp(family,'gaussian'), Qmy=mean(QY);  QY=QY-Qmy; end
+            glmfit = nets_glmnet(QX,QY,family,0,tmpnm,options);
+            if Qifold == 1, 
+                Lambda2 = glmfit.lambda; 
+                options.lambda = Lambda2; 
+                options = rmfield(options,'nlambda');
+            end
+            QXJ=QXin(QJ,:);
+            if ~isempty(confounds),
+                QconfXte = (Qconfounds(QJ,:)-repmat(QconfM,length(QJ),1));
+                [~,QXJ,~,QYinCOMPARE(QJ,:)] = nets_deconfound(QXJ,QYinCOMPARE(QJ,:),QconfXte,family,QbetaX,QbetaY,tmpnm);
+            end
+            QXJ=(QXJ-repmat(Qmx,length(QJ),1)) ./ repmat(Qsx,length(QJ),1);
+            if strcmp(family,'gaussian'),
+                QpredictedYp(QJ,1:length(glmfit.lambda)) = QXJ * glmfit.beta + repmat(Qmy,length(QJ),length(glmfit.lambda));
+            elseif strcmp(family,'multinomial')
+                QpredictedYp(QJ,:,1:length(glmfit.lambda)) = nets_glmnetpredict(glmfit,QXJ,glmfit.lambda,'response');
+            elseif strcmp(family,'poisson')
+                QpredictedYp(QJ,1:length(glmfit.lambda)) = exp(QXJ * glmfit.beta + repmat(glmfit.a0',length(QJ),1) );
+            else % cox
+                QpredictedYp(QJ,1:length(glmfit.lambda)) = exp(QXJ * glmfit.beta);
+            end
+        end
+        % Pick the one with the lowest deviance (=quadratic error for family="gaussian")
+        if strcmp(family,'gaussian'), % it's actually QN*log(sum.... but it doesn't matter
+            Qdev = sum(( QpredictedYp(:,1:length(glmfit.lambda)) - repmat(QYinCOMPARE,1,length(glmfit.lambda))).^2) / QN; Qdev = Qdev';
+        elseif strcmp(family,'multinomial'),
+            Qdev = Inf(length(glmfit.lambda),1);
+            for i=1:length(glmfit.lambda), Qdev(i) = - sum(log(sum(QYinCOMPARE .* QpredictedYp(:,:,i) ,2))); end
+        elseif strcmp(family,'poisson'),
+            Ye = repmat(QYinCOMPARE,1,length(glmfit.lambda));
+            Qdev = sum(Ye .* log( (Ye+(Ye==0)) ./ QpredictedYp(:,1:length(glmfit.lambda))) - (Ye - QpredictedYp(:,1:length(glmfit.lambda)))); Qdev = Qdev';
+        else % cox
+            failures = find(QYinCOMPARE(:,2) == 1)';
+            Qdev = zeros(length(glmfit.lambda),1);
+            for i=1:length(glmfit.lambda),
+                for n=failures, Qdev(i) = Qdev(i) + log( QpredictedYp(n,i) / sum(QpredictedYp(QYinCOMPARE(:,1) >= QYinCOMPARE(n,1),i)) ); end
+            end; Qdev = -2 * Qdev;
+        end
+        
+        % get the best over lambda, and run again on the whole fold
+        [~, ilamb] = min(Qdev);
+        options.lambda = (2:-.1:1)' * Lambda2(ilamb);  % it doesn't like just 1 lambda
+        glmfit = nets_glmnet(X,Y,family,0,tmpnm,options);
+        if strcmp(family,'multinomial'), fprintf('It %d-2, %d variables, alpha=%f,lambda=%f \n',ifold,sum(glmfit.beta{1}(:,end)~=0 ) , options.alpha,options.lambda(end))
+        else fprintf('It %d-2, %d variables, alpha=%f,lambda=%f \n',ifold,sum(glmfit.beta(:,end)~=0 ), options.alpha,options.lambda(end)); end
+        if perm==1 && ~strcmp(family,'gaussian') && ~strcmp(family,'cox')
+            options0 = {};  options0.alpha = 1;
+            if strcmp(family,'cox'), options0.intr = false; end
+            glmfit0 = nets_glmnet(X,Y,family,0,tmpnm,options0); % all this in deconfounded space
+        end
+        % predict the test fold
+        XJ=Xin(J,groti);
+        
+        if ~isempty(confounds),
+            confXte = (confounds(J,:)-repmat(confM,length(J),1)); 
+            [~,XJ] = nets_deconfound(XJ,[],confXte,family,betaX(:,groti),[],tmpnm);
+        end
+        
+        XJ=(XJ-repmat(mx,length(J),1)) ./ repmat(sx,length(J),1);
+        if strcmp(family,'gaussian'),
+            predictedYp(J) = XJ * glmfit.beta(:,end) + repmat(my,length(J),1);
+        elseif strcmp(family,'multinomial') % deconfounded space, both predictedYp and predictedYp0
+            predictedYp(J,:) = nets_glmnetpredict(glmfit,XJ,glmfit.lambda(end),'response'); 
+            if perm==1, predictedYp0(J,:) = nets_glmnetpredict(glmfit0,XJ,glmfit0.lambda(1),'response'); end
+        elseif strcmp(family,'poisson')
+            predictedYp(J) = exp(XJ * glmfit.beta(:,end) + glmfit.a0(end) );
+            if perm==1, predictedYp0(J) = exp(XJ * glmfit0.beta(:,1) + glmfit0.a0(1) ); end
+        else % cox
+            predictedYp(J) = exp(XJ * glmfit.beta(:,end));
+            if perm==1, predictedYp0(J) = 1; end
+        end
+        
+        predictedYpC(J,:) = predictedYp(J,:); YC(J,:) = Yin(J,:); % predictedYpC and YC in deconfounded space
+        if ~isempty(confounds), % in order to later estimate prediction accuracy in deconfounded space
+            [~,~,~,YC(J,:)] = nets_deconfound([],Yin(J,:),confXte,family,[],betaY,tmpnm);
+            if ~isempty(betaY)
+                predictedYp(J,:) = nets_confound(predictedYp(J,:),confXte,family,betaY); % original space
+            end
+        end
+        
+        if ~strcmp(family,'gaussian') && perm==1,
+            predictedYp0C(J,:) = predictedYp0(J,:); % deconfounded space
+            if ~isempty(confounds) && ~isempty(betaY), predictedYp0(J,:) = nets_confound(predictedYp0(J,:),confXte,family,betaY); end % original space
+        end
+        
+    end
+    
+    if strcmp(family,'gaussian')  
+        grotperms(perm) = sum((YC-predictedYpC).^2);
+    elseif strcmp(family,'multinomial')
+        grotperms(perm) = - 2 * sum(log(sum(YC .* predictedYpC,2)));  % MAL
+    elseif strcmp(family,'poisson')
+        grotperms(perm) = 2 * sum(YC.*log((YC+(YC==0)) ./ predictedYpC) - (YC - predictedYpC) );
+    else % cox - in the current version there is no response deconfounding for family="cox"
+        grotperms(perm) = 0;
+        failures = find(Yin(:,2) == 1)';
+        for n=failures, grotperms(perm) = grotperms(perm) + log( predictedYp(n) / sum(predictedYp(Yin(:,1) >= Yin(n,1))) ); end
+        grotperms(perm) = -2 * grotperms(perm);
+    end
+    
+    if perm==1
+        predictedY = predictedYp;
+        predictedYC = predictedYpC;
+        YoutC = YC;
+        stats = {};
+        if strcmp(family,'gaussian')
+            stats.dev = sum((YinORIG-predictedYp).^2);
+            stats.nulldev = sum((YinORIG-YinORIGmean).^2);
+            [~,stats.pval] = corrcoef(YinORIG,predictedYp); stats.pval=stats.pval(1,2);
+            if ~isempty(confounds),
+                stats.dev_deconf = sum((YC-predictedYpC).^2);
+                stats.nulldev_deconf = sum((YC-YCmean).^2);
+                [~,stats.pval_deconf] = corrcoef(YC,predictedYpC); stats.pval_deconf=stats.pval_deconf(1,2);
+            end
+        elseif strcmp(family,'multinomial')
+            stats.accuracy = mean(sum(YinORIG .* predictedYp,2));
+            stats.dev = - 2 * sum(log(sum(YinORIG .* predictedYp,2)));
+            stats.nulldev = - 2 * sum(log(sum(YinORIG .* predictedYp0,2)));
+            if ~isempty(confounds),
+                stats.accuracy_deconf = mean(sum(YC .* predictedYpC,2));
+                stats.dev_deconf = - 2 * sum(log(sum(YC .* predictedYpC,2)));
+                stats.nulldev_deconf = - 2 * sum(log(sum(YC .* predictedYp0C,2)));
+            end
+        elseif strcmp(family,'poisson')
+            stats.dev = 2 * sum(YinORIG.*log((YinORIG+(YinORIG==0)) ./ predictedYp) - (YinORIG - predictedYp) );
+            stats.nulldev = 2 * sum(YinORIG.*log((YinORIG+(YinORIG==0)) ./ predictedYp0) - (YinORIG - predictedYp0) );
+            if ~isempty(confounds),
+                stats.dev_deconf = 2 * sum(YC.*log((YC+(YC==0)) ./ predictedYpC) - (YC - predictedYpC) );
+                stats.nulldev_deconf = 2 * sum(YC.*log((YC+(YC==0)) ./ predictedYp0C) - (YC - predictedYp0C) );
+            end
+        else % cox
+            failures = find(YinORIG(:,2) == 1)';
+            stats.dev = 0;
+            for n=failures, stats.dev = stats.dev + log( predictedYp(n) / sum(predictedYp(YinORIG(:,1) >= YinORIG(n,1))) ); end
+            stats.dev = -2 * stats.dev;
+            stats.nulldev = 0;
+            for n=failures, stats.nulldev = stats.nulldev + log( predictedYp0(n) / sum(predictedYp0(YinORIG(:,1) >= YinORIG(n,1))) ); end
+            stats.nulldev = -2 * stats.nulldev;
+        end
+        stats.cod = 1 - stats.dev / stats.nulldev;
+        if ~isempty(confounds), stats.cod_deconf = 1 - stats.dev_deconf / stats.nulldev_deconf; end
+        
+        if show_scatter && (strcmp(family,'gaussian') || strcmp(family,'poisson')),
+            figure;  scatter(Yin,predictedYp);
+        end
+    end
+end
+
+if (Nperm>1), stats.pval = sum(grotperms<=grotperms(1)) / Nperm; end
+
+system(['rm -fr ',tmpnm]);
+
+end
+
