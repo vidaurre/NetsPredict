@@ -35,10 +35,6 @@
 %           the second to Yin, telling which deconfounding strategy to follow if confounds 
 %           are specified: if 0, no deconfounding is applied; if 1, confounds
 %           are regressed out; if 2, confounds are regressed out using cross-validation
-%   + DECscheme - which deconfounding strategy to follow, if confounds is
-%           specified. If 0, confounds are regressed out of Xin and Yin; if 1,
-%           confounds are regressed out of Xin; if 2, confounds are regressed out
-%           of Xin using cross-validation 
 %   + CVscheme - vector of two elements: first is number of folds for model evaluation;
 %             second is number of folds for the model selection phase (0 in both for LOO)
 %   + CVfolds - prespecified CV folds for the outer loop
@@ -411,9 +407,9 @@ for perm=1:Nperm
                     end
                 end
                 switch Method
-                    case 'glmnet'
+                    case {'glmnet','Glmnet'}
                         glmfit = nets_glmnet(QX,QY,family{1},0,tmpnm,options);
-                    case 'lasso'
+                    case {'lasso','Lasso'}
                         glmfit = struct();
                         if Qifold==1
                             [glmfit.beta,lassostats] = lasso(QX,QY,'Alpha',alpha(ialph),'NumLambda',nlambda);
@@ -421,7 +417,7 @@ for perm=1:Nperm
                             [glmfit.beta,lassostats] = lasso(QX,QY,'Alpha',alpha(ialph),'Lambda',Lambda{ialph});
                         end
                         glmfit.lambda = lassostats.Lambda; 
-                    case 'ridge'
+                    case {'ridge','Ridge'}
                         glmfit = struct();
                         glmfit.beta = (QX' * QX + alpha(ialph) * ridg_pen_scale * eye(size(QX,2))) \ (QX' * QY);
                 end
