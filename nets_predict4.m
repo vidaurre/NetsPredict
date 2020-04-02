@@ -80,7 +80,7 @@ else
     Method = parameters.Method; 
     if strcmp(Method,'glmnet') 
         ch = which('glmnet');
-        if ~isempty(ch)
+        if isempty(ch)
             error('Package glmnet not found ? use Method=''lasso'' instead')
         end
     end
