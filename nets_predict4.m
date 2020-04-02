@@ -71,8 +71,21 @@ function [predictedY,stats,predictedYC,YoutC,predictedYmean,beta,Cin,grotperms,f
 
 if nargin<3, family = 'gaussian'; end
 if nargin<4, parameters = {}; end
-if ~isfield(parameters,'Method'), Method = 'glmnet';
-else, Method = parameters.Method; end
+if ~isfield(parameters,'Method')
+    ch = which('glmnet');
+    if ~isempty(ch),  Method = 'glmnet';
+    else, Method = 'lasso';
+    end
+else
+    Method = parameters.Method; 
+    if strcmp(Method,'glmnet') 
+        ch = which('glmnet');
+        if ~isempty(ch)
+            error('Package glmnet not found ? use Method=''lasso'' instead')
+        end
+    end
+end
+
 if ~isfield(parameters,'alpha')
     if strcmp(Method,'ridge')
         alpha = [0.00001 0.0001 0.001 0.01 0.1 0.4 0.7 0.9 1.0 10 100];
