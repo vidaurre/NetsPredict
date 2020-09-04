@@ -81,7 +81,7 @@ else
     if strcmp(Method,'glmnet') 
         ch = which('glmnet');
         if isempty(ch)
-            error('Package glmnet not found ? use Method=''lasso'' instead')
+            error('Package glmnet not found, use Method=''lasso'' instead')
         end
     end
 end
