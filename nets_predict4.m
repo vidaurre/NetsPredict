@@ -37,7 +37,10 @@
 %           are regressed out; if 2, confounds are regressed out using cross-validation
 %   + CVscheme - vector of two elements: first is number of folds for model evaluation;
 %             second is number of folds for the model selection phase (0 in both for LOO)
-%   + CVfolds - prespecified CV folds for the outer loop
+%   + CVfolds - prespecified CV folds for the outer loop: it must be a (nfolds x 1) cell
+%   with one vector per fold, indicating which samples are going to
+%   be used for testing in that fold; therefore the intersection of all the vectors
+%   should amount to 1:N, where N is the number of samples
 %   + Nperm - number of permutations (set to 0 to skip permutation testing)
 %   + show_scatter - set to 1 to show a scatter plot of predicted_Y vs Y (only for family='gaussian' or 'poisson')
 %   + verbose -  display progress?
