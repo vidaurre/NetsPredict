@@ -209,6 +209,8 @@ if (nargin>4) && ~isempty(varargin{1})
             [grotMZi(:,2),grotMZi(:,1)]=ind2sub([length(cs) length(cs)],find(tril(cs,1)==1));
             [grotDZi(:,2),grotDZi(:,1)]=ind2sub([length(cs) length(cs)],find(tril(cs,1)==2));
         else
+            error(['There is an issue with specifying correlation_structure as a vector '...
+                'that I have not resolved yet. Please use matrix format'])
             allcs = [];
             nz = cs>0; 
             gr = unique(cs(nz));  
@@ -589,12 +591,12 @@ for perm=1:Nperm
         % predictedYpC and YC in deconfounded space; Yin and predictedYp are confounded
         predictedYpC(J,:) = predictedYp(J,:); 
         YC(J,:) = Yin(J,:);
-        YinORIGmean(J) = YCmean(J,:);
+        YinORIGmean(J,:) = YCmean(J,:);
         if deconfounding(2) % in order to later estimate prediction accuracy in deconfounded space
             [~,~,~,~,~,YC(J,:)] = nets_deconfound([],YC(J,:),confounds(J,:),family{2},[],[],betaY,interceptY,tmpnm);
             if ~isempty(betaY)
                 predictedYp(J,:) = nets_confound(predictedYp(J,:),confounds(J,:),family{2},betaY,interceptY); % original space
-                YinORIGmean(J) = nets_confound(YCmean(J,:),confounds(J,:),family{2},betaY,interceptY); 
+                YinORIGmean(J,:) = nets_confound(YCmean(J,:),confounds(J,:),family{2},betaY,interceptY); 
             end
         end
         
