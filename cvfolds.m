@@ -1,14 +1,15 @@
 function folds = cvfolds(Y,family,CVscheme,allcs)
 
 if nargin<4, allcs = []; end
+is_cs_matrix = (size(allcs,2) == size(allcs,1));
 
 [N,q] = size(Y);
-if ~strcmp(family,'multinomial'), 
+if ~strcmp(family,'multinomial')
     q = length(unique(Y)); 
-    if q<=3,
+    if q<=3
        Y = nets_class_vectomat(Y);  
     end
-elseif strcmp(family,'multinomial') && q==1,
+elseif strcmp(family,'multinomial') && q==1
     Y = nets_class_vectomat(Y); q = size(Y,2);
 end
 
@@ -30,7 +31,13 @@ if strcmp(family,'multinomial') || q<=3   % stratified CV that respects the fami
                 if (grotDONEI(j)==0)
                     Jj=[folds{ifold} j];
                     if (~isempty(allcs))  % leave out all samples related to the one in question
-                        if size(find(allcs(:,1)==j),1)>0, Jj=[Jj allcs(allcs(:,1)==j,2)']; end
+                        if is_cs_matrix
+                            if size(find(allcs(:,1)==j),1)>0, Jj=[Jj allcs(allcs(:,1)==j,2)']; end
+                        else
+                            if allcs(j)>0
+                                group = find(allcs==j)'; group(group==j) = []; Jj=[Jj group];
+                            end
+                        end
                     end
                     if length(Jj)>1, countsI = sum(Y(Jj,:)); % before: counts(LOfracI,:) + sum(Y(Jj,:));
                     else countsI = Y(Jj,:); % before: counts(LOfracI,:) + Y(Jj,:);
@@ -45,10 +52,17 @@ if strcmp(family,'multinomial') || q<=3   % stratified CV that respects the fami
             [~,j] = min(d); j = j(1); 
             folds{ifold}=[folds{ifold} j];
             if (~isempty(allcs))  % leave out all samples related (according to cs) to the one in question
-                if size(find(allcs(:,1)==j),1)>0, folds{ifold}=[folds{ifold} allcs(allcs(:,1)==j,2)']; end
+                if is_cs_matrix
+                    if size(find(allcs(:,1)==j),1)>0, folds{ifold}=[folds{ifold} allcs(allcs(:,1)==j,2)']; end
+                else
+                    if allcs(j)>0 
+                        group = find(allcs==j)'; group(group==j) = []; 
+                        folds{ifold}=[folds{ifold} group]; 
+                    end
+                end
             end
             grotDONE(folds{ifold})=1; counts(k,:) = sum(Y(folds{ifold},:));
-            if k>1 && k<nfolds,
+            if k>1 && k<nfolds
                 if sum(grotDONE)>k*N/nfolds, break; end
             end
         end
@@ -62,14 +76,21 @@ else % standard CV respecting the family structure
             if (grotDONE(j)==0)
                 folds{ifold}=[folds{ifold} j];
                 if (~isempty(allcs))  % leave out all samples related to the one in question
-                    if size(find(allcs(:,1)==j),1)>0
-                        folds{ifold}=[folds{ifold} allcs(allcs(:,1)==j,2)'];
+                    if is_cs_matrix
+                        if size(find(allcs(:,1)==j),1)>0
+                            folds{ifold}=[folds{ifold} allcs(allcs(:,1)==j,2)'];
+                        end
+                    else
+                        if allcs(j)>0
+                            group = find(allcs==j)'; group(group==j) = []; 
+                            folds{ifold}=[folds{ifold} group]; 
+                        end
                     end
                 end
                 grotDONE(folds{ifold})=1;
             end
             j=j+1;
-            if k>1 && k<nfolds,
+            if k>1 && k<nfolds
                 if sum(grotDONE)>k*N/nfolds
                     break
                 end

@@ -204,25 +204,15 @@ if (Nperm<2),  Nperm=1;  end
 if (nargin>4) && ~isempty(varargin{1})
     cs=varargin{1};
     if ~isempty(cs)
-        if size(cs,2)>1 % matrix format
+        is_cs_matrix = (size(cs,2) == size(cs,1));
+        if is_cs_matrix 
             [allcs(:,2),allcs(:,1)]=ind2sub([length(cs) length(cs)],find(cs>0));    
             [grotMZi(:,2),grotMZi(:,1)]=ind2sub([length(cs) length(cs)],find(tril(cs,1)==1));
             [grotDZi(:,2),grotDZi(:,1)]=ind2sub([length(cs) length(cs)],find(tril(cs,1)==2));
         else
-            error(['There is an issue with specifying correlation_structure as a vector '...
-                'that I have not resolved yet. Please use matrix format'])
-            allcs = [];
-            nz = cs>0; 
-            gr = unique(cs(nz));  
-            for g=gr'
-               ss = find(cs==g);
-               for s1=ss
-                   for s2=ss
-                       allcs = [allcs; [s1 s2]];
-                   end
-               end
-            end
-            % grotMZi and grotDZi need to be computer here
+            allcs = find(cs > 0);
+            grotMZi = find(cs == 1); 
+            grotDZi = find(cs == 2); 
         end
     end
 else
@@ -291,6 +281,9 @@ for perm=1:Nperm
             Yin=YinORIG(rperm,:);
             Yin2=YinORIG2(rperm,:);
         elseif (PrePerms==0)          % complex permutation, taking into account correlation structure
+            if ~is_cs_matrix
+                error('Permutation testing is not yet implemented for this kind of correlation structure')
+            end
             PERM=zeros(1,N);
             perm1=randperm(size(grotMZi,1));
             for ipe=1:length(perm1)
@@ -314,11 +307,9 @@ for perm=1:Nperm
     end
     
     if strcmp(family{1},'multinomial')
-        predictedYp = zeros(N,q); 
-        if deconfounding(2), predictedYpC = zeros(N,q); end  
+        predictedYp = zeros(N,q); predictedYpC = zeros(N,q); 
     else
-        predictedYp = zeros(N,1);
-        if deconfounding(2), predictedYpC = zeros(N,1); end 
+        predictedYp = zeros(N,1); predictedYpC = zeros(N,1);
     end
     
     % create the inner CV structure - stratified for family=multinomial
@@ -355,7 +346,13 @@ for perm=1:Nperm
         % family structure for this fold
         Qallcs=[]; 
         if (~isempty(cs))
-            [Qallcs(:,2),Qallcs(:,1)]=ind2sub([length(cs(ji,ji)) length(cs(ji,ji))],find(cs(ji,ji)>0));  
+            if is_cs_matrix
+                [Qallcs(:,2),Qallcs(:,1)]=ind2sub([length(cs(ji,ji)) length(cs(ji,ji))],find(cs(ji,ji)>0));
+            else
+                Qallcs = find(cs(ji) > 0);
+                %QgrotMZi = find(cs(ji) == 1);
+                %QgrotDZi = find(cs(ji) == 2);
+            end
         end
                 
         % deconfounding business
