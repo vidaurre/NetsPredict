@@ -4,13 +4,13 @@ function folds = cvfolds(Y,family,CVscheme,allcs)
 % If family is 'multinomial', it will stratify the estimation
 
 if nargin<4, allcs = []; end
-is_cs_matrix = (size(allcs,2) == size(allcs,1));
+is_cs_matrix = (size(allcs,2) == 2);
+
+[N,q] = size(Y);
 
 if CVscheme==0, nfolds = N;
 else nfolds = CVscheme;
 end
-
-[N,q] = size(Y);
 
 if isempty(allcs)
     folds = cell(nfolds,1);
@@ -19,7 +19,7 @@ if isempty(allcs)
         return
     elseif strcmpi(family,'multinomial')
         if q > 1, Y = nets_class_mattovec(Y); end
-        c = cvpartition(Y,'KFold',nfolds,'Stratify',true);
+        c = cvpartition(Y,'KFold',nfolds);
     else
         c = cvpartition(N,'KFold',nfolds);
     end

@@ -18,13 +18,17 @@
 %   + 'cox': a two-column matrix with the 1st column for time and the 2d for status: 1 for death and 0 right censored.
 %   If a list with two elements, the first is the family for the feature selection stage (typically gaussian)
 % parameters is a structure with:
-%   + Method - One of 'glmnet', 'lasso' or 'ridge'. Glmnet and lasso are
+%   + Method - One of 'glmnet', 'lasso', 'ridge' or 'unregularized'. Glmnet and lasso are
 %           the elastic net, but with different code: glmnet uses the glmnet
 %           package, essentially a matlab wrap of Fortran code - it is very quick
 %           but ocassionally crashes taking down the whole Matlab; 'lasso' uses the
 %           matlab function for the elastic net, it is considerable slower and only works for
-%           the 'gaussian' family, but never crashes. 
-%           Finally, 'ridge' is just ridge regression with built-in code.
+%           the 'multinomial' family when there only 2 classes, but never crashes. 
+%           'ridge' is ridge regression, and 'unregularized' does not impose a penalty.
+%           Note that for 'multinomial' family, only 'glmnet' and
+%           'unregularized' are allowed, but they way they treat the
+%           estimation is different: 'glmnet' is symmetric, whereas when
+%           'unregularized' is used, the last category is used as a reference
 %   + Nfeatures - Proportion of features to initially filter  
 %             if Nfeatures has an optional second component, for early stopping on Elastic net
 %   + alpha - a vector of weights on the L2 penalty on the regression
@@ -72,6 +76,8 @@
 function [predictedY,stats,predictedYC,YoutC,predictedYmean,beta,Cin,grotperms,folds] ...
     = nets_predict4(Yin,Xin,family,parameters,varargin)
 
+warning('Outdated version - use nets_predict5 instead')
+
 if nargin<3, family = 'gaussian'; end
 if nargin<4, parameters = {}; end
 if ~isfield(parameters,'Method')
@@ -81,7 +87,7 @@ if ~isfield(parameters,'Method')
     end
 else
     Method = parameters.Method; 
-    if strcmp(Method,'glmnet') 
+    if strcmpi(Method,'glmnet') 
         ch = which('glmnet');
         if isempty(ch)
             error('Package glmnet not found, use Method=''lasso'' instead')
@@ -89,6 +95,21 @@ else
     end
 end
 
+% if strcmpi(Method,'lasso') || strcmpi(Method,'ridge')
+%    if ~strcmp(family,'gaussian')
+%        error('Families other than gaussian are only implemented for the glmnet method')
+%    end
+% end
+
+if strcmpi(Method,'lasso') || strcmpi(Method,'ridge')
+    if strcmpi(family,'poisson')
+        error('Poisson family is only implemented for the glmnet and lasso methods')
+    end
+    if strcmpi(family,'cox')
+        error('Cox family is only implemented for the glmnet and lasso methods')
+    end
+end
+    
 if ~isfield(parameters,'alpha')
     if strcmp(Method,'ridge')
         alpha = [0.00001 0.0001 0.001 0.01 0.1 0.4 0.7 0.9 1.0 10 100];
@@ -144,11 +165,6 @@ if deconfounding(2)==2
    error('This deconfounding strategy is not available for Y - deconfounding(2) must be 0 or 1') 
 end
     
-if strcmp(Method,'lasso') || strcmp(Method,'ridge')
-   if ~strcmp(family,'gaussian')
-       error('Families other than gaussian are only implemented for the glmnet method')
-   end
-end
 enet = strcmp(Method,'lasso') || strcmp(Method,'glmnet');
 if ~enet
     nlambda = 1; 
@@ -177,6 +193,9 @@ if strcmp(family{1},'multinomial') || strcmp(family{2},'multinomial')
         q = size(Yin2,2);
     end
     if q>9, error('Too many classes!'); end
+    if (strcmpi(Method,'lasso') || strcmpi(Method,'ridge') || strcmpi(Method,'unregularized')) && (q > 2)
+       error('Multinomial family for more than 2 classes is not implemented for lasso/ridge Methods') 
+    end
 end
 
 % Putting Xin it in tangent space if riemann=1
@@ -306,7 +325,7 @@ for perm=1:Nperm
         end
     end
     
-    if strcmp(family{1},'multinomial')
+    if strcmp(family{1},'multinomial') && (strcmpi(Method,'glmnet') || strcmpi(Method,'unregularized'))
         predictedYp = zeros(N,q); predictedYpC = zeros(N,q); 
     else
         predictedYp = zeros(N,1); predictedYpC = zeros(N,1);
@@ -404,130 +423,159 @@ for perm=1:Nperm
         end
         Dev = Inf(nlambda,length(alpha));
         Lambda = {};
-        for ialph = 1:length(alpha)
-            if strcmp(family{1},'multinomial'), QpredictedYp = Inf(QN,q,nlambda);
-            else QpredictedYp = Inf(QN,nlambda);
-            end
-            options.alpha = alpha(ialph); options.nlambda = nlambda;
-            QYinCOMPARE=QYin;
-            % Inner CV loop
-            for Qifold = 1:length(Qfolds)
-                QJ = Qfolds{Qifold};
-                Qji=setdiff(1:QN,QJ); 
-                QX = QXin(Qji,:); QY = QYin(Qji,:);
-                if strcmp(family{1},'gaussian'), Qmy=mean(QY);  QY=QY-Qmy; end
-                if enet
-                    if Qifold>1, options.lambda = Lambda{ialph};
-                    elseif isfield(options,'lambda'), options = rmfield(options,'lambda');
+        if ~strcmpi(Method,'unregularized')
+            for ialph = 1:length(alpha)
+                if strcmpi(family{1},'multinomial') && strcmpi(Method,'glmnet')
+                    QpredictedYp = Inf(QN,q,nlambda);
+                else QpredictedYp = Inf(QN,nlambda);
+                end
+                options.alpha = alpha(ialph); options.nlambda = nlambda;
+                QYinCOMPARE=QYin;
+                % Inner CV loop
+                for Qifold = 1:length(Qfolds)
+                    QJ = Qfolds{Qifold};
+                    Qji=setdiff(1:QN,QJ);
+                    QX = QXin(Qji,:); QY = QYin(Qji,:);
+                    if strcmp(family{1},'gaussian'), Qmy=mean(QY);  QY=QY-Qmy; end
+                    if enet
+                        if Qifold>1, options.lambda = Lambda{ialph};
+                        elseif isfield(options,'lambda'), options = rmfield(options,'lambda');
+                        end
+                    end
+                    switch Method
+                        case {'glmnet','Glmnet'}
+                            estimation = nets_glmnet(QX,QY,family{1},0,tmpnm,options);
+                        case {'lasso','Lasso'}
+                            estimation = struct();
+                            if strcmp(family{1},'gaussian')
+                                if Qifold==1
+                                    [estimation.beta,lassostats] = lasso(QX,QY,'Alpha',alpha(ialph),'NumLambda',nlambda);
+                                else
+                                    [estimation.beta,lassostats] = lasso(QX,QY,'Alpha',alpha(ialph),'Lambda',Lambda{ialph});
+                                end
+                            else
+                                if strcmp(family{1},'multinomial'), strfam = 'binomial'; % q > 2 not implemented here
+                                elseif strcmp(family{1},'cox'), error('Cox family not implemented for lasso method');
+                                else, strfam = family{1};
+                                end
+                                if Qifold==1
+                                    [estimation.beta,lassostats] = lassoglm(QX,QY,strfam,'Alpha',alpha(ialph),'NumLambda',nlambda);
+                                else
+                                    [estimation.beta,lassostats] = lassoglm(QX,QY,strfam,'Alpha',alpha(ialph),'Lambda',Lambda{ialph});
+                                end
+                            end
+                            estimation.lambda = lassostats.Lambda;
+                        case {'ridge','Ridge'}
+                            if strcmp(family{1},'gaussian')
+                                estimation = struct();
+                                estimation.beta = (QX' * QX + alpha(ialph) * ridg_pen_scale * eye(size(QX,2))) \ (QX' * QY);
+                            else
+                                error('Only Gaussian family is implemented for ridge method');
+                            end
+                    end
+                    if Qifold == 1 && enet
+                        Lambda{ialph} = estimation.lambda;
+                        options = rmfield(options,'nlambda');
+                    end
+                    QXJ=QXin(QJ,:);
+                    if strcmp(family{1},'gaussian')
+                        if enet
+                            QpredictedYp(QJ,1:length(estimation.lambda)) = ...
+                                QXJ * estimation.beta + repmat(Qmy,length(QJ),length(estimation.lambda));
+                        else
+                            QpredictedYp(QJ) = QXJ * estimation.beta + repmat(Qmy,length(QJ),1);
+                        end
+                    elseif strcmp(family{1},'multinomial')
+                        if strcmpi(Method,'glmnet')
+                            QpredictedYp(QJ,:,1:length(estimation.lambda)) = ...
+                                nets_glmnetpredict(estimation,QXJ,estimation.lambda,'response');
+                        elseif strcmpi(Method,'lasso')
+                            QpredictedYp(QJ,1:length(estimation.lambda)) = glmval(estimation.beta,QXJ,'logit');
+                        elseif strcmpi(Method,'ridge')
+                            error('Only Gaussian family is implemented for ridge method');
+                        else % 'unregularized'
+                            
+                        end
+                    elseif strcmp(family{1},'poisson')
+                        if strcmpi(Method,'glmnet')
+                            QpredictedYp(QJ,1:length(estimation.lambda)) = ...
+                                max(nets_glmnetpredict(estimation,QXJ,estimation.lambda,'response'),eps);
+                        elseif strcmpi(Method,'lasso')
+                            QpredictedYp(QJ,1:length(estimation.lambda)) = glmval(estimation.beta,QXJ,'log');
+                        end
+                        %exp(QXJ * glmfit.beta + repmat(glmfit.a0',length(QJ),1) );
+                    else % cox
+                        QpredictedYp(QJ,1:length(estimation.lambda)) = exp(QXJ * estimation.beta);
                     end
                 end
-                switch Method
-                    case {'glmnet','Glmnet'}
-                        glmfit = nets_glmnet(QX,QY,family{1},0,tmpnm,options);
-                    case {'lasso','Lasso'}
-                        glmfit = struct();
-                        if Qifold==1
-                            [glmfit.beta,lassostats] = lasso(QX,QY,'Alpha',alpha(ialph),'NumLambda',nlambda);
-                        else
-                            [glmfit.beta,lassostats] = lasso(QX,QY,'Alpha',alpha(ialph),'Lambda',Lambda{ialph});
-                        end
-                        glmfit.lambda = lassostats.Lambda; 
-                    case {'ridge','Ridge'}
-                        glmfit = struct();
-                        glmfit.beta = (QX' * QX + alpha(ialph) * ridg_pen_scale * eye(size(QX,2))) \ (QX' * QY);
-                end
-                if Qifold == 1 && enet
-                    Lambda{ialph} = glmfit.lambda; 
-                    options = rmfield(options,'nlambda');
-                end
-                QXJ=QXin(QJ,:);
-                if strcmp(family{1},'gaussian')
+                % Pick the one with the lowest deviance (=quadratic error for family="gaussian")
+                if strcmp(family{1},'gaussian') % it's actually QN*log(sum.... but it doesn't matter
                     if enet
-                        QpredictedYp(QJ,1:length(glmfit.lambda)) = ...
-                            QXJ * glmfit.beta + repmat(Qmy,length(QJ),length(glmfit.lambda));
+                        Qdev = sum(( QpredictedYp(:,1:length(Lambda{ialph})) - ...
+                            repmat(QYinCOMPARE,1,length(Lambda{ialph}))).^2) / QN; Qdev = Qdev';
                     else
-                        QpredictedYp(QJ) = QXJ * glmfit.beta + repmat(Qmy,length(QJ),1);
+                        Qdev = sum(( QpredictedYp - QYinCOMPARE ).^2) / QN;
                     end
                 elseif strcmp(family{1},'multinomial')
-                    QpredictedYp(QJ,:,1:length(glmfit.lambda)) = ...
-                        nets_glmnetpredict(glmfit,QXJ,glmfit.lambda,'response');
+                    Qdev = Inf(length(Lambda{ialph}),1);
+                    for i=1:length(Lambda{ialph}), Qdev(i) = - sum(log(sum(QYinCOMPARE .* QpredictedYp(:,:,i) ,2))); end
                 elseif strcmp(family{1},'poisson')
-                    QpredictedYp(QJ,1:length(glmfit.lambda)) = ...
-                        max(nets_glmnetpredict(glmfit,QXJ,glmfit.lambda,'response'),eps); 
-                        %exp(QXJ * glmfit.beta + repmat(glmfit.a0',length(QJ),1) );
+                    Ye = repmat(QYinCOMPARE,1,length(Lambda{ialph}));
+                    Qdev = sum(Ye .* log( (Ye+(Ye==0)) ./ QpredictedYp(:,1:length(Lambda{ialph}))) - ...
+                        (Ye - QpredictedYp(:,1:length(Lambda{ialph}))));
+                    Qdev = Qdev';
                 else % cox
-                    QpredictedYp(QJ,1:length(glmfit.lambda)) = exp(QXJ * glmfit.beta);
+                    failures = find(QYinCOMPARE(:,2) == 1)';
+                    Qdev = zeros(length(Lambda{ialph}),1);
+                    for i=1:length(Lambda{ialph})
+                        for n=failures
+                            Qdev(i) = Qdev(i) + ...
+                                log( QpredictedYp(n,i) / sum(QpredictedYp(QYinCOMPARE(:,1) >= QYinCOMPARE(n,1),i)) );
+                        end
+                    end; Qdev = -2 * Qdev;
                 end
+                Dev(1:length(Qdev),ialph) = Qdev;
             end
-            % Pick the one with the lowest deviance (=quadratic error for family="gaussian")
-            if strcmp(family{1},'gaussian') % it's actually QN*log(sum.... but it doesn't matter
-                if enet
-                    Qdev = sum(( QpredictedYp(:,1:length(Lambda{ialph})) - ...
-                        repmat(QYinCOMPARE,1,length(Lambda{ialph}))).^2) / QN; Qdev = Qdev';
+            [~,opt] = min(Dev(:));
+            if enet
+                ialph = ceil(opt / nlambda);
+                if ialph==0, ialph = length(Lambda); end; if ialph>length(Lambda), ialph = length(Lambda); end
+                ilamb = mod(opt,nlambda);
+                if ilamb==0, ilamb = nlambda; end; if ilamb>length(Lambda{ialph}), ilamb = length(Lambda{ialph}); end
+                options.alpha = alpha(ialph);
+                if verbose, fprintf('Alpha chosen to be  %f \n',options.alpha); end
+                options.lambda = (2:-.1:1)' * Lambda{ialph}(ilamb); % it doesn't like just 1 lambda
+                % we set lambda instead of pmax/dfmax because of a bug in glmnet that arises when pmax is specified
+                %options.pmax = max(2,ceil(mean(Qdf{ialph}(ilamb,:))));
+                %options.dfmax = options.pmax;
+                %options = rmfield(options,'lambda');
+                % and run again on the whole fold
+                if strcmp(Method,'glmnet')
+                    estimation = nets_glmnet(X,Y,family{1},0,tmpnm,options);
                 else
-                    Qdev = sum(( QpredictedYp - QYinCOMPARE ).^2) / QN;  
+                    estimation = struct();
+                    estimation.beta = lasso(X,Y,'Alpha',options.alpha,'Lambda',options.lambda);
                 end
-            elseif strcmp(family{1},'multinomial')
-                Qdev = Inf(length(Lambda{ialph}),1);
-                for i=1:length(Lambda{ialph}), Qdev(i) = - sum(log(sum(QYinCOMPARE .* QpredictedYp(:,:,i) ,2))); end
-            elseif strcmp(family{1},'poisson')
-                Ye = repmat(QYinCOMPARE,1,length(Lambda{ialph}));
-                Qdev = sum(Ye .* log( (Ye+(Ye==0)) ./ QpredictedYp(:,1:length(Lambda{ialph}))) - ...
-                    (Ye - QpredictedYp(:,1:length(Lambda{ialph})))); 
-                Qdev = Qdev';
-            else % cox
-                failures = find(QYinCOMPARE(:,2) == 1)';
-                Qdev = zeros(length(Lambda{ialph}),1);
-                for i=1:length(Lambda{ialph})
-                    for n=failures
-                        Qdev(i) = Qdev(i) + ...
-                            log( QpredictedYp(n,i) / sum(QpredictedYp(QYinCOMPARE(:,1) >= QYinCOMPARE(n,1),i)) ); 
-                    end
-                end; Qdev = -2 * Qdev;
-            end
-            Dev(1:length(Qdev),ialph) = Qdev;
-        end
-        [~,opt] = min(Dev(:));
-        if enet
-            ialph = ceil(opt / nlambda);
-            if ialph==0, ialph = length(Lambda); end; if ialph>length(Lambda), ialph = length(Lambda); end
-            ilamb = mod(opt,nlambda);
-            if ilamb==0, ilamb = nlambda; end; if ilamb>length(Lambda{ialph}), ilamb = length(Lambda{ialph}); end
-            options.alpha = alpha(ialph);
-            if verbose, fprintf('Alpha chosen to be  %f \n',options.alpha); end
-            options.lambda = (2:-.1:1)' * Lambda{ialph}(ilamb); % it doesn't like just 1 lambda
-            % we set lambda instead of pmax/dfmax because of a bug in glmnet that arises when pmax is specified
-            %options.pmax = max(2,ceil(mean(Qdf{ialph}(ilamb,:))));
-            %options.dfmax = options.pmax;
-            %options = rmfield(options,'lambda');
-            % and run again on the whole fold
-            if strcmp(Method,'glmnet')
-                glmfit = nets_glmnet(X,Y,family{1},0,tmpnm,options);
             else
-                glmfit = struct();
-                glmfit.beta = lasso(X,Y,'Alpha',options.alpha,'Lambda',options.lambda);
+                ialph = opt;
+                options.alpha = alpha(ialph);
+                if verbose, fprintf('Alpha chosen to be  %f \n',options.alpha); end
+                estimation = struct();
+                estimation.beta = (X' * X + options.alpha * ridg_pen_scale * eye(size(X,2))) \ (X' * Y);
             end
-        else
-            ialph = opt; 
-            options.alpha = alpha(ialph);
-            if verbose, fprintf('Alpha chosen to be  %f \n',options.alpha); end
-            glmfit = struct();
-            glmfit.beta = (X' * X + options.alpha * ridg_pen_scale * eye(size(X,2))) \ (X' * Y);
-        end
-        if perm==1 
-            if strcmp(family{1},'multinomial')
-                beta(groti0,ifold,1) = glmfit.beta{1}(:,end);
-            else
-                beta(groti0,ifold,1) = glmfit.beta(:,end);
+            if perm==1
+                beta(groti0,ifold,1) = estimation.beta(:,end);
+            end
+        else % Unregularized
+            if strcmp(family{1},'gaussian')
+                beta(groti0,ifold,1) = (X' * X) \ (X' * Y);
+            elseif strcmp(family{1},'multinomial') && q > 2
+                beta(groti0,ifold,1) = mnrfit(X,Y);
             end
         end
 
-        if strcmp(family{2},'multinomial') % because there are a different set of coefficients per class
-            groti = false(size(glmfit.beta{1},1),1);
-            for nb=1:length(glmfit.beta), groti(glmfit.beta{nb}(:,end)~=0) = true; end
-        else
-            groti = glmfit.beta(:,end)~=0;
-        end
+        groti = estimation.beta(:,end)~=0;
+        
         if sum(groti)<2
             if verbose, fprintf('The empty model turns out to be the best...\n '); end
             if sum(groti)==1 && groti(1)==0, groti(1) = 1;
@@ -563,13 +611,15 @@ for perm=1:Nperm
                     QpredictedYp(QJ,ialph) = QXJ * beta_relaxed + repmat(Qmy,length(QJ),1);
                 end
             end
-            Qdev = sum(( QpredictedYp(:,1:length(glmfit.lambda)) - ...
+            Qdev = sum(( QpredictedYp(:,1:length(estimation.lambda)) - ...
                 repmat(QYinCOMPARE,1,length(alpha_ridge))).^2) / QN; Qdev = Qdev';
             [~, ialph] = min(Qdev);
             beta_final = (X' * X + alpha_ridge(ialph) * ridg_pen_scale * eye(size(X,2))) \ (X' * Y);
             beta(groti,ifold,2) = beta_final;
-        else
-            beta_final = glmfit.beta(:,end);
+        elseif relaxed
+            error('Relaxed lasso only implemented for elastic net')
+        end
+            beta_final = estimation.beta(:,end);
         end
         % predict the test fold
         XJ=Xin(J,groti);
@@ -577,12 +627,23 @@ for perm=1:Nperm
         if strcmp(family{2},'gaussian')
             predictedYp(J) = XJ * beta_final + repmat(my,length(J),1);
         elseif strcmp(family{2},'multinomial') % deconfounded space, both predictedYp and predictedYp0
-            predictedYp(J,:) = nets_glmnetpredict(glmfit,XJ,glmfit.lambda(end),'response'); 
+            if strcmpi(Method,'glmnet')
+                predictedYp(J,:) = nets_glmnetpredict(estimation,XJ,estimation.lambda(end),'response');
+            elseif strcmpi(Method,'lasso')
+                predictedYp(J) = glmval(estimation.beta,XJ,'logit');
+            elseif strcmpi(Method,'unregularized')
+                predictedYp(J,:) = mnrval(estimation.beta,XJ);
+            end
         elseif strcmp(family{2},'poisson')
-            predictedYp(J,:) = max(nets_glmnetpredict(glmfit,XJ,glmfit.lambda(end),'response'),eps);  
+            if strcmpi(Method,'glmnet')
+                predictedYp(J,:) = max(nets_glmnetpredict(estimation,XJ,estimation.lambda(end),'response'),eps);
+            elseif strcmpi(Method,'lasso')
+                QpredictedYp(QJ,1:length(estimation.lambda)) = glmval(estimation.beta,QXJ,'log');
+                
+            end
             %predictedYp(J) = exp(XJ * glmfit.beta(:,end) + glmfit.a0(end) );
         else % cox
-            predictedYp(J) = exp(XJ * glmfit.beta(:,end));
+            predictedYp(J) = exp(XJ * estimation.beta(:,end));
         end
         
         % predictedYpC and YC in deconfounded space; Yin and predictedYp are confounded
