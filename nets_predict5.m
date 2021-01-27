@@ -1,4 +1,4 @@
-function [stats,predictedY,predictedY0,predictedYD,predictedYD0] ...
+function [stats,predictedY,predictedY0,predictedYD,predictedYD0,beta] ...
     = nets_predict5(Yin,Xin,family,parameters,varargin)
 % nets_predict - elastic-net estimation, with two-stage feature selection,
 % using (stratified) LOO and permutation testing
@@ -77,8 +77,12 @@ function [stats,predictedY,predictedY0,predictedYD,predictedYD0] ...
 % predictedY - predicted response,in the original (non-decounfounded) space
 % predictedYD - the predicted response, in the deconfounded space
 % predictedY0 - predicted baseline response, in the original (non-decounfounded) space
-% predictedYD0 - the predicted baseline response, in the deconfounded space    
-    
+% predictedYD0 - the predicted baseline response, in the deconfounded space  
+% beta - A (no. of outer-loop CV folds x no. of predictors) matrix
+%           with the estimated regression coefficients for each CV fold
+%           (which correspond to standarized predictors); only implemented
+%           for Gaussian family so far. 
+
 if nargin<3, family = 'gaussian'; end
 if nargin<4, parameters = {}; end
 if ~isfield(parameters,'Method')
@@ -284,6 +288,16 @@ if strcmpi(family,'multinomial') && (strcmpi(Method,'glmnet') || strcmpi(Method,
 else
     predictedYp = zeros(N,1); predictedYp0 = zeros(N,1);
     predictedYpD = zeros(N,1); predictedYpD0 = zeros(N,1);
+end
+
+if strcmpi(family,'gaussian')
+    if isempty(CVfolds)
+        beta = zeros(p,CVscheme(1));
+    else
+        beta = zeros(p,length(CVfolds));
+    end
+else
+    beta = [];
 end
 
 for perm=1:Nperm
@@ -579,6 +593,10 @@ for perm=1:Nperm
                         end
                         estimation.a0 = lassostats.Intercept; estimation0.a0 = lassostats0.Intercept;
                 end 
+                if perm==1 && nargout>=6 && strcmpi(family,'gaussian')
+                    beta(groti,ifold) = estimation.beta(:,end); 
+                end
+                
             else % ridge
                 ialph = opt;
                 options.alpha = alpha(ialph);
@@ -590,7 +608,11 @@ for perm=1:Nperm
                 X0 = [ones(size(X,1),1) X0]; 
                 R = zeros(2); R(2,2) = options.alpha * ridg_pen_scale;
                 estimation0.beta = (X0' * X0 + R) \ (X0' * Y);
+                if perm==1 && nargout>=6 && strcmpi(family,'gaussian') 
+                    beta(groti,ifold) = estimation.beta(2:end); 
+                end
             end
+            
         else
             estimation = struct(); estimation0 = struct();
             if strcmpi(family,'gaussian')
@@ -598,10 +620,12 @@ for perm=1:Nperm
                 estimation.beta = (X' * X) \ (X' * Y);
                 X0 = [ones(size(X0,1),1) X0]; 
                 estimation0.beta = (X0' * X0) \ (X0' * Y);
+                if perm==1 && nargout>=6, beta(groti,ifold) = estimation.beta(2:end); end
             else
                 estimation.beta = mnrfit(X,Y); 
                 estimation0.beta = mnrfit(X0,Y); 
             end
+            
         end
 
         % predict the test fold
