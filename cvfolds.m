@@ -15,7 +15,7 @@ end
 if isempty(allcs)
     folds = cell(nfolds,1);
     if nfolds==N
-        for j = 1:n, folds{j} = j; end
+        for j = 1:N, folds{j} = j; end
         return
     elseif strcmpi(family,'multinomial')
         if q > 1, Y = nets_class_mattovec(Y); end

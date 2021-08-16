@@ -124,7 +124,7 @@ end
 
 if ~isfield(parameters,'alpha')
     if strcmpi(Method,'ridge')
-        alpha = [0.00001 0.0001 0.001 0.01 0.1 0.4 0.7 0.9 1.0 10 100];
+        alpha = [0.00001 0.0001 0.001 0.01 0.1 0.4 0.7 0.9 1.0 2.5 5.0 10 100];
     else
         alpha = [0.01 0.1 0.4 0.7 0.9 0.99];
     end
@@ -351,7 +351,6 @@ for perm=1:Nperm
     if perm==1 && ~strcmpi(Method,'unregularized')
         stats = struct();
         stats.alpha = zeros(1,length(folds) );
-        stats.alpha_ridge = zeros(1,length(folds) );
     end
     
     for ifold = 1:length(folds) 
@@ -421,7 +420,6 @@ for perm=1:Nperm
                     QpredictedYp = Inf(QN,nlambda);
                 end
                 options = {}; options.standardize = false;
-                if strcmpi(family,'gaussian'), options.intr = false; end
                 options.alpha = alpha(ialph); options.nlambda = nlambda;
                 
                 QYinCOMPARE = QYin;
@@ -531,11 +529,11 @@ for perm=1:Nperm
                 elseif strcmpi(family,'multinomial')
                     if strcmpi(Method,'glmnet')  
                         Qdev = Inf(length(Lambda{ialph}),1);
-                        for i=1:length(Lambda{ialph})
+                        for i = 1:length(Lambda{ialph})
                             Qdev(i) = - sum(log(sum(QYinCOMPARE .* QpredictedYp(:,:,i) ,2))); 
                         end
                     else % lasso
-                        for i=1:length(Lambda{ialph})
+                        for i = 1:length(Lambda{ialph})
                             Qdev(i) = - sum(log( ((1-QYinCOMPARE) .* (1-QpredictedYp(:,i))))) ...
                                 - sum(log( (QYinCOMPARE .* QpredictedYp(:,i))));
                         end
