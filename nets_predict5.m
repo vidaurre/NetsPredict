@@ -709,6 +709,7 @@ for perm=1:Nperm
         
         if perm==1 && ~strcmpi(Method,'unregularized')
             stats.alpha(ifold) = options.alpha;
+            if enet; stats.lambda(ifold) = options.lambda(end); end
         end
         
     end
