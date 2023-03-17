@@ -169,6 +169,9 @@ function CVerr = cvglmnet(x,y,family,options,type,nfolds,foldid,parallel,keep,gr
 %    cvglmnetPlot(cvfit);
 %    
 % % Cox
+%    n=1000;p=30;
+%    nzc=p/3;
+%    x=randn(n,p);
 %    beta=randn(nzc,1);
 %    fx=x(:,1:nzc)*beta/3;
 %    hx=exp(fx);
@@ -246,7 +249,7 @@ if (size(y,1) ~= N)
     y = transpose(y);
 end
 
-if (~isempty(options.offset)) && (size(options.offset) ~= N)
+if (~isempty(options.offset)) && (size(options.offset, 1) ~= N)
     options.offset = transpose(options.offset);
 end
 
@@ -259,22 +262,26 @@ glmfit = glmnet(x, y, family, options);
 is_offset = glmfit.offset;
 options.lambda = glmfit.lambda;
 
-if strcmp(glmfit.class,'multnet')
-    nz = glmnetPredict(glmfit,[],[],'nonzero');
+nz = glmnetPredict(glmfit,[],[],'nonzero');
+if (strcmp(glmfit.class,'multnet'))
     nnz = zeros(length(options.lambda),length(nz));
     for i = 1:length(nz)
         nnz(:,i) = transpose(sum(nz{i},1));
     end
     nz = ceil(median(nnz,2));
+elseif strcmp(glmfit.class, 'mrelnet') 
+    nz = transpose(sum(nz{1}, 1));
 else
-    nz = transpose(sum(glmnetPredict(glmfit,[],[],'nonzero'),1));
+    nz = transpose(sum(nz,1));
 end
 
 if isempty(foldid)
-    foldid = randsample(cat(2,repmat(1:nfolds,1,floor(N/nfolds)), 1:mod(N,nfolds)),N);
+    population = cat(2, repmat(1:nfolds, 1, floor(N/nfolds)), 1:mod(N,nfolds));
+    foldid = population(randperm(length(population), N));
 else
     nfolds = max(foldid);
 end
+foldid = reshape(foldid, numel(foldid), 1);
 
 if (nfolds < 3)
     error('nfolds must be bigger than 3; nfolds=10 recommended');
@@ -315,9 +322,8 @@ else
         end
         xr = x(~which,:); yr = y(~which,:);
         cpredmat{i} = glmnet(xr, yr, family, opts);
-    end    
+    end
 end
-
 
 switch cpredmat{1}.class
     case 'elnet'
@@ -348,9 +354,10 @@ end
 if strcmp(type, 'auc')
     cvm = -cvm;
 end
-CVerr.lambda_min=nanmax(options.lambda(cvm<=nanmin(cvm)));
-semin=CVerr.cvup(options.lambda==CVerr.lambda_min);
-CVerr.lambda_1se=nanmax(options.lambda(cvm<semin));
+CVerr.lambda_min = max(options.lambda(cvm<=min(cvm)));
+idmin = options.lambda==CVerr.lambda_min;
+semin = cvm(idmin)+cvsd(idmin);
+CVerr.lambda_1se = max(options.lambda(cvm<=semin));
 CVerr.class = 'cv.glmnet';
 end
 

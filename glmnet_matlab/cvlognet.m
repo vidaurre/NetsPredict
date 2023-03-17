@@ -125,14 +125,14 @@ result = auc(Y, Prob, Weights);
 function result = auc(y, prob, w)
 
 if isempty(w)
-    [~,~,rprob] = unique(prob);
+    mindiff = min(diff(unique(prob)));
+    pert = unifrnd(0,mindiff/3,size(prob));
+    [~,~,rprob] = unique(prob+pert);
     n1 = sum(y); n0 = length(y) - n1;
     u = sum(rprob(y == 1)) - n1*(n1+1)/2;
     result = u / (n1*n0);
 else
-    [~,~,op] = unique(prob);
-    op = op + unifrnd(0,0.5,length(prob),1);  %random arrangement if repeated
-    [~,~,op] = unique(op);
+    [~,op] = sort(prob);
     y = y(op); w = w(op);
     cw = cumsum(w);
     w1 = w(y == 1);

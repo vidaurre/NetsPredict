@@ -9,7 +9,7 @@ function fit = glmnet(x, y, family, options)
 %    regularization path is computed for the lasso or elasticnet penalty 
 %    at a grid of values for the regularization parameter lambda. Can deal 
 %    with all shapes of data, including very large sparse data matrices. 
-%    Fits linear, logistic and multinomial, poisson, and Cox regression 
+%    Fits linear, logistic and multinomial, Poisson, and Cox regression 
 %    models.
 %
 % USAGE:
@@ -39,7 +39,7 @@ function fit = glmnet(x, y, family, options)
 %             matrix of quantitative responses. 
 % family      Reponse type. (See above). Default is 'gaussian'.
 % options     A structure that may be set and altered by glmnetSet.
-%             Selected default options:
+%             Default values for some often used options:
 %                options.alpha = 1.0  (elastic-net mixing parameter)
 %                options.nlambda = 100  (number of lambda values)
 %                options.lambda depends on data, nlambda and
@@ -164,7 +164,7 @@ function fit = glmnet(x, y, family, options)
 %    fit2=glmnet(x,g2,'binomial');
 %
 % % Multinomial:
-%    g4=sample(4,100,true);
+%    g4=randsample(4,100,true);
 %    fit3=glmnet(x,g4,'multinomial');
 %    opts=struct('mtype','grouped');
 %    fit3a=glmnet(x,g4,'multinomial',opts);
@@ -248,12 +248,6 @@ end
 
 %Get the names of input variables
 out_x = inputname(1); out_y = inputname(2);
-if isempty(out_x)
-    out_x = mat2str(x);
-end
-if isempty(out_y)
-    out_y = mat2str(y);
-end
 out_family = mat2str([]); out_options = mat2str([]);
 if nargin > 2
     if ~isempty(inputname(3))
@@ -437,6 +431,10 @@ if issparse(x)
     pcs = [0;cumsum(histc(jcs, 1:nvars))] + 1;
 else
     irs = []; pcs = [];
+end
+
+if issparse(y)
+    y = full(y);
 end
   
 switch family

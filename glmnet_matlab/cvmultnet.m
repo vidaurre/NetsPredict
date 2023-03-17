@@ -20,10 +20,10 @@ end
 prob_min = 1e-5; prob_max = 1 - prob_min;
 nc = size(y);
 if nc(2) == 1
-    classes = unique(y);
+    [classes,~,sy] = unique(y);
     nc = length(classes);
     indexes = eye(nc);
-    y = indexes(y,:);
+    y = indexes(sy,:);
 else
     nc = nc(2);
 end
@@ -69,15 +69,17 @@ switch type
         end
         classid = reshape(classid,[],1);
         yperm = reshape(permute(bigY, [1,3,2]),[],nc);
-        cvraw = reshape(1 - yperm([numel(classid);classid]),[],length(lambda));
+        idx = sub2ind(size(yperm), 1:length(classid), classid');
+        cvraw = reshape(1 - yperm(idx), [], length(lambda));
 end
+
 if (grouped)
     cvob = cvcompute(cvraw, weights, foldid, nlams);
     cvraw = cvob.cvraw;
     weights = cvob.weights;
     N = cvob.N;
 end
-% end
+
 cvm = wtmean(cvraw,weights);
 sqccv = (bsxfun(@minus,cvraw,cvm)).^2;
 cvsd = sqrt(wtmean(sqccv,weights)./(N-1));

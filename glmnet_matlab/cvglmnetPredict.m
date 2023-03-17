@@ -27,7 +27,7 @@ function CVpred = cvglmnetPredict(object, newx, s, varargin)
 % varargin    Other arguments to predict.
 %
 % OUTPUT ARGUMENTS:
-%    If only the cv.glmnet is provided, the function returns the 
+%Â    If only the cv.glmnet is provided, the function returns the 
 %    coefficients at the default s = 'lambda_1se'. Otherwise, the object 
 %    returned depends the ... argument which is passed on to the 
 %    glmnetPredict for glmnet objects.
@@ -98,7 +98,7 @@ else
     end
 end
 
-CVpred = glmnetPredict(object.glmnet_fit,newx,lambda,varargin);
+CVpred = glmnetPredict(object.glmnet_fit,newx,lambda,varargin{:});
 
 end
         

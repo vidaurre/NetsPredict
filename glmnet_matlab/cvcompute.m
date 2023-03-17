@@ -4,7 +4,7 @@ function cvcpt = cvcompute(mat, weights, foldid, nlams)
 
 % Compute the weighted mean and SD within folds, and hence the se of the mean
 
-wisum = accumarray(transpose(foldid),weights);
+wisum = accumarray(foldid,weights);
 nfolds = max(foldid);
 outmat = NaN(nfolds,size(mat,2));
 good = zeros(nfolds,size(mat,2));

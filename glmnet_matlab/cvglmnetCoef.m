@@ -21,7 +21,7 @@ function result = cvglmnetCoef(object, s)
 %             is numeric, it is taken as the value(s) of lambda to be used.
 %
 % OUTPUT ARGUMENTS:
-% result      If s is 'lambda_1se' or 'lambda_min', the coefficients at 
+%Â result      If s is 'lambda_1se' or 'lambda_min', the coefficients at 
 %             that s is returned. If s is numeric, a (nvars+1) x length(s) 
 %             matrix is returned with each column being the coefficients 
 %             at an s. Note that the first row are the intercepts (0 if no 

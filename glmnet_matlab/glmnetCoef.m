@@ -34,7 +34,7 @@ function result = glmnetCoef(object, s, exact)
 %             the parent environment.
 %
 % OUTPUT ARGUMENTS:
-% result      A (nvars+1) x length(s) matrix with each column being the 
+%Â result      A (nvars+1) x length(s) matrix with each column being the 
 %             coefficients at an s. Note that the first row are the 
 %             intercepts (0 if no intercept in the original model).
 %

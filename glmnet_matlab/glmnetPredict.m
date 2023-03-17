@@ -15,6 +15,12 @@ function result = glmnetPredict(object, newx, s, type, exact, offset)
 %    come in the order listed above. To set default values on the way, use
 %    empty matrix []. 
 %    For example, pred=glmnetPredict(fit,[],[],'coefficients').
+%   
+%    To make EXACT prediction, the input arguments originally passed to 
+%    "glmnet" MUST be VARIABLES (instead of expressions, or fields
+%    extracted from some struct objects). Alternatively, users should
+%    manually revise the "call" field in "object" (expressions or variable
+%    names) to match the original call to glmnet in the parent environment.
 %
 % INPUT ARGUMENTS:
 % object      Fitted "glmnet" model object.
@@ -191,8 +197,7 @@ if (exact && ~isempty(s))
     end
 end
 
-
-if strcmp(object.class,'elnet') || strcmp(object.class,'fishnet')
+if strcmp(object.class,'elnet')
     a0 = transpose(object.a0);
     nbeta=[a0; object.beta];
     
@@ -219,9 +224,44 @@ if strcmp(object.class,'elnet') || strcmp(object.class,'fishnet')
         if (size(offset,2)==2)
             offset = offset(:,2);
         end
-        result = result + reshape(offset,size(result));
+        result = result + repmat(offset, 1, size(result, 2));
     end
 end
+
+if strcmp(object.class,'fishnet')
+     a0 = transpose(object.a0);
+    nbeta=[a0; object.beta];
+    
+    if (~isempty(s))
+        lambda=object.lambda;
+        lamlist=lambda_interp(lambda,s);
+        nbeta=nbeta(:,lamlist.left).*repmat(lamlist.frac',size(nbeta,1),1) +nbeta(:,lamlist.right).*(1-repmat(lamlist.frac',size(nbeta,1),1));
+    end
+    
+    if strcmp(type, 'coefficients')
+        result = nbeta;
+        return;
+    end
+    if strcmp(type, 'nonzero')
+        result = nonzeroCoef(nbeta(2:size(nbeta,1),:), true);
+        return;
+    end
+    
+    result = [ones(size(newx,1),1), newx] * nbeta;
+    if (object.offset)
+        if isempty(offset)
+            error('No offset provided for prediction, yet used in fit of glmnet');
+        end
+        if (size(offset,2) == 2)
+            offset = offset(:, 2);
+        end
+        result = result + repmat(offset, 1, size(result,2));
+    end
+    
+    if strcmp(type, 'response')
+        result = exp(result);
+    end
+end   
 
 if strcmp(object.class, 'lognet')
     a0 = object.a0;
@@ -250,7 +290,7 @@ if strcmp(object.class, 'lognet')
         if (size(offset,2)==2)
             offset = offset(:,2);
         end
-        result = result + reshape(offset,size(result));
+        result = result + repmat(offset, 1, size(result, 2));
     end
     switch type
         case 'response'
@@ -258,6 +298,7 @@ if strcmp(object.class, 'lognet')
             result = 1./ (1+pp);
         case 'class'
             result = (result > 0) * 2 + (result <= 0) * 1;
+            result = object.label(result);
     end
 end
 
@@ -294,7 +335,7 @@ if strcmp(object.class, 'multnet') || strcmp(object.class,'mrelnet')
     end
     if strcmp(type, 'nonzero')
         if (object.grouped)
-            result = nonzeroCoef(nbeta{1}(2:size(nbeta{1},1),:),true);
+            result{1} = nonzeroCoef(nbeta{1}(2:size(nbeta{1},1),:),true);
         else
             for i=1:nclass
                 result{i}=nonzeroCoef(nbeta{i}(2:size(nbeta{i},1),:),true);
@@ -331,7 +372,7 @@ if strcmp(object.class, 'multnet') || strcmp(object.class,'mrelnet')
             dp=permute(dp,[3,1,2]);
             result = [];
             for i=1:size(dp,3)
-                result = [result, softmax(dp(:,:,i))];
+                result = [result, object.label(softmax(dp(:,:,i)))];
             end
     end
     
@@ -357,7 +398,7 @@ if strcmp(object.class,'coxnet')
         if isempty(offset)
             error('No offset provided for prediction, yet used in fit of glmnet');
         end
-        result = result + reshape(offset,size(result));
+        result = result + repmat(offset, 1, size(result, 2));
     end
     
     if strcmp(type, 'response')
